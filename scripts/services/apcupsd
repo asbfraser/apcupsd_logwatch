@@ -1,0 +1,172 @@
+#!/usr/bin/perl
+
+use strict;
+use HTTP::Date;
+
+##########################################################################
+# $Id: apcupsd,v 1.0 2015/11/22 13:20:00 mike Exp $
+##########################################################################
+
+my $Detail = $ENV{'LOGWATCH_DETAIL_LEVEL'} || 0;
+
+my %data;
+my @powerdata = ();
+
+my $powerlost = 0;
+
+sub duration
+{
+	my $powerlost = shift;
+	my $datetime = shift;
+
+	my $duration = '';
+	my $powerback = str2time($datetime);
+
+	if($powerlost > 0 && $powerback > $powerlost)
+	{
+		$duration = ' (';
+
+		my $timediff = $powerback - $powerlost;
+
+		my $hours = int($timediff / 60 / 60);
+		$timediff -= $hours * 60 *60;
+
+		my $mins = int($timediff / 60);
+		$timediff -= $mins * 60;
+
+		if($hours > 1)
+		{
+			$duration .= "$hours hours, ";
+		}
+		elsif($hours > 0)
+		{
+			$duration .= "$hours hour, ";
+		}
+
+		if($mins > 1)
+		{
+			$duration .= "$mins minutes, ";
+		}
+		elsif($mins > 0)
+		{
+			$duration .= "$mins minute, ";
+		}
+
+		if($timediff == 1)
+		{
+			$duration .= "$timediff second)";
+		}
+		else
+		{
+			$duration .= "$timediff seconds)";
+		}
+	}
+
+	return $duration;
+}
+
+while(my $line = <STDIN>)
+{
+	chomp $line;
+	$line =~ s/^\s+//;
+	$line =~ s/\s+$//;
+	next unless $line;
+
+	my ($datetime, $msg) = $line =~ /^(\d\d\d\d-\d\d-\d\d\s\d\d:\d\d:\d\d\s.\d+)\s+(.+)$/;
+
+	if($msg =~ /^apcupsd.*startup succeeded$/)
+	{
+		$data{'Daemon'}{"Startup succeeded"}++;
+	}
+	elsif($msg =~ /^apcupsd shutdown succeeded$/)
+	{
+		$data{'Daemon'}{"Shutdown succeeded"}++;
+	}
+	elsif($msg =~ /^apcupsd exiting/)
+	{
+		$data{'Daemon'}{"Exiting"}++;
+	}
+	elsif($msg =~ /^Communications with UPS lost\.$/)
+	{
+		$data{'Daemon'}{"Communications with UPS lost"}++;
+	}
+	elsif($msg =~ /^Communications with UPS restored\.$/)
+	{
+		$data{'Daemon'}{"Communications with UPS restored"}++;
+	}
+	elsif($msg =~ /^UPS Self Test switch to battery\.$/)
+	{
+		$data{'Self-Test'}{"Self-Test initiated"}++;
+	}
+	elsif($msg =~ /^UPS Self Test completed: /)
+	{
+		my ($test_result) = $msg =~ /^UPS Self Test completed: (.*)$/;
+		$data{'Self-Test'}{$test_result}++;
+	}
+	elsif($msg =~ /^Power failure\.$/)
+	{
+		$powerlost = str2time($datetime);
+
+		push(@powerdata, "Power failure at $datetime");
+	}
+	elsif($msg =~ /^Running on UPS batteries\.$/)
+	{
+		push(@powerdata, "Running on UPS batteries at $datetime");
+	}
+	elsif($msg =~ /^Mains returned\. No longer on UPS batteries\.$/)
+	{
+		my $duration = duration($powerlost, $datetime);
+
+		push(@powerdata, "Mains returned. No longer on UPS batteries at $datetime$duration");
+	}
+	elsif($msg =~ /^Power is back\. UPS running on mains\.$/)
+	{
+		my $duration = duration($powerlost, $datetime);
+
+		push(@powerdata, "Power is back. UPS running on mains at $datetime$duration");
+	}
+	elsif($msg =~ /^Battery charge below low limit\.$/)
+	{
+		my $duration = duration($powerlost, $datetime);
+
+		push(@powerdata, "Battery charge below low limit at $datetime$duration");
+	}
+	elsif($msg =~ /^Initiating system shutdown!$/)
+	{
+		push(@powerdata, "Initiating system shutdown at $datetime");
+	}
+	elsif($msg =~ /^User logins prohibited$/)
+	{
+		push(@powerdata, "User logins prohibited at $datetime");
+	}
+}
+
+if(@powerdata)
+{
+	print "Power Events:\n";
+
+	foreach my $entry (@powerdata)
+	{
+		print "    $entry\n";
+	}
+	print "\n";
+}
+
+if(keys %data)
+{
+	foreach my $type (sort keys %data)
+	{
+		print "$type:\n";
+		foreach my $entry (sort {$a cmp $b} keys %{$data{$type}}) {
+			print "   $entry: $data{$type}{$entry} Time(s)\n";
+		}
+		print "\n";
+	}
+}
+
+# vi: shiftwidth=3 tabstop=3 syntax=perl et
+# Local Variables:
+# mode: perl
+# perl-indent-level: 3
+# indent-tabs-mode: nil
+# End:
